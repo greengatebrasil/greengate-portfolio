@@ -9,6 +9,10 @@
 
 ---
 
+
+https://github.com/user-attachments/assets/3ea854e9-9758-49a7-ae72-bd6390a320a9
+
+
 ## What is GreenGate?
 
 GreenGate is a geospatial validation engine that checks if land parcels overlap with:
