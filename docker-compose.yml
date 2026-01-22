@@ -1,0 +1,113 @@
+# GreenGate - Docker Compose para Desenvolvimento
+# 
+# Uso:
+#   docker-compose up -d        # Inicia todos os serviços
+#   docker-compose logs -f api  # Ver logs da API
+#   docker-compose down         # Para tudo
+#
+# Produção (usar override ou definir env vars):
+#   UVICORN_WORKERS=4 UVICORN_RELOAD=false docker-compose up -d
+
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # BANCO DE DADOS
+  # ==========================================================================
+  db:
+    image: postgis/postgis:15-3.3
+    container_name: greengate-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: greengate
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # REDIS (Cache e Filas)
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: greengate-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # API BACKEND
+  # ==========================================================================
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: greengate-api
+    environment:
+      - DEBUG=${DEBUG:-true}
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/greengate
+      - REDIS_URL=redis://redis:6379/0
+      # Database Pool
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-10}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-5}
+      - DB_COMMAND_TIMEOUT=${DB_COMMAND_TIMEOUT:-10}
+      # Payload Limits
+      - MAX_UPLOAD_SIZE=${MAX_UPLOAD_SIZE:-5242880}
+      - MAX_GEOM_VERTICES=${MAX_GEOM_VERTICES:-10000}
+      - MAX_AREA_HA=${MAX_AREA_HA:-10000}
+      # Uvicorn
+      - UVICORN_WORKERS=${UVICORN_WORKERS:-1}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Uvicorn com hardening
+    # Dev: usa --reload
+    # Prod: usar docker-compose.prod.yml ou override sem --reload
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --timeout-keep-alive 5
+      --limit-concurrency 100
+      --reload
+
+  # ==========================================================================
+  # FRONTEND (quando implementado)
+  # ==========================================================================
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: greengate-frontend
+  #   ports:
+  #     - "3000:3000"
+  #   volumes:
+  #     - ./frontend:/app
+  #     - /app/node_modules
+  #   depends_on:
+  #     - api
+  #   command: npm run dev
+
+volumes:
+  postgres_data:
+  redis_data:

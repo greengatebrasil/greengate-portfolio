@@ -1,0 +1,78 @@
+# =============================================================================
+# GreenGate - Dockerfile para Produção (Railway)
+# =============================================================================
+
+FROM python:3.11-slim
+
+# Metadados
+LABEL maintainer="GreenGate Team"
+LABEL version="1.0.0"
+
+# Variáveis de ambiente
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# =============================================================================
+# GDAL/GEOS/PROJ - A "Maldição" resolvida
+# =============================================================================
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # GDAL e dependências geoespaciais
+    gdal-bin \
+    libgdal-dev \
+    libgeos-dev \
+    libproj-dev \
+    # Compiladores (para wheels que precisam compilar)
+    gcc \
+    g++ \
+    # psycopg2 dependencies
+    libpq-dev \
+    # Utilitários
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Setar variáveis do GDAL
+ENV GDAL_CONFIG=/usr/bin/gdal-config \
+    CPLUS_INCLUDE_PATH=/usr/include/gdal \
+    C_INCLUDE_PATH=/usr/include/gdal
+
+# Criar usuário não-root
+RUN useradd --create-home --shell /bin/bash appuser
+
+# Diretório de trabalho
+WORKDIR /app
+
+# Copiar requirements primeiro (cache de layer)
+COPY backend/requirements.txt .
+
+# Instalar dependências Python
+# Primeiro numpy (dependência de GDAL bindings)
+RUN pip install --no-cache-dir numpy==1.26.4
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copiar código da aplicação
+COPY backend/app ./app
+COPY backend/alembic ./alembic
+COPY backend/alembic.ini .
+
+# Copiar script de entrypoint
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
+
+# Ajustar permissões
+RUN chown -R appuser:appuser /app
+
+# Trocar para usuário não-root
+USER appuser
+
+# Expor porta (Railway usa $PORT)
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
+
+# Usar entrypoint que roda migrations
+ENTRYPOINT ["./entrypoint.sh"]
